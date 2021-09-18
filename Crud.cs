@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
@@ -12,10 +13,12 @@ namespace MongoORM4NetCore
     /// Allows using the main CRUD operations for the given type.
     /// </summary>
     /// <typeparam name="T"></typeparam>
-    public class Crud<T> : IRepository<T>, ICrud where T : DbObject
+    public class Crud<T> : IRepository<T> where T : IDbObject
     {
         private readonly IMongoDatabase _database;
         protected IMongoCollection<BsonDocument> Table;
+        protected IMongoCollection<T> GenericTable;
+        public string TableName => typeof(T).Name;
 
         /// <summary>
         /// Tries to initialize the database and finds or creates a MongoDB Collection.
@@ -24,7 +27,9 @@ namespace MongoORM4NetCore
         {
             _database = MongoDbConnection.Database;
             Table = _database.GetCollection<BsonDocument>(typeof(T).Name);
+            GenericTable = _database.GetCollection<T>(typeof(T).Name);
         }
+
         /// <summary>
         /// Finds the object given by the parameter "_id" and updates it. If not found, inserts that object.
         /// </summary>
@@ -36,11 +41,13 @@ namespace MongoORM4NetCore
             {
                 BsonDocument filter = GetDocumentForInheritance();
                 filter.AddRange(new BsonDocument { { "_id", entity.Id } });
-                var updateOption = new UpdateOptions { IsUpsert = true };
-                Table.ReplaceOne(filter, entity.ToBsonDocument(), updateOption);
+                Table.ReplaceOne(filter, entity.ToBsonDocument(), new ReplaceOptions
+                {
+                    IsUpsert = true
+                });
                 return true;
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 throw new Exception();
             }
@@ -61,6 +68,7 @@ namespace MongoORM4NetCore
                 throw new Exception(id);
             }
         }
+
         /// <summary>
         /// Deletes the given object by the "id" parameter.
         /// </summary>
@@ -74,6 +82,7 @@ namespace MongoORM4NetCore
                 {
                     return SoftDelete(id);
                 }
+
                 var filter = new BsonDocument { { "_id", id } };
                 Table.DeleteOne(filter);
                 return true;
@@ -99,11 +108,12 @@ namespace MongoORM4NetCore
                 throw new TypeAccessException(); //todo throw new UnsupportedInheritanceException()
             }
         }
+
         /// <summary>
         /// Returns all the object in the MongoDB Collection.
         /// </summary>
         /// <returns></returns>
-        public virtual List<T> GetAll()
+        public virtual IEnumerable<T> GetAll()
         {
             try
             {
@@ -116,15 +126,15 @@ namespace MongoORM4NetCore
                     var batch = found.Current;
                     results.AddRange(batch.Select(item => BsonSerializer.Deserialize<T>(item)));
                 }
+
                 return results;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-
                 return new List<T>();
             }
-
         }
+
         /// <summary>
         /// Drops the collection.
         /// </summary>
@@ -132,6 +142,7 @@ namespace MongoORM4NetCore
         {
             _database.DropCollection(typeof(T).Name);
         }
+
         /// <summary>
         /// Returns number of rows from collection which is not marked as deleted if collection is supporting SoftDelete.
         /// </summary>
@@ -154,12 +165,13 @@ namespace MongoORM4NetCore
         /// </summary>
         /// <param name="filter"></param>
         /// <returns></returns>
-        public virtual List<T> GetAll(BsonDocument filter)
+        public virtual IEnumerable<T> GetAll(BsonDocument filter)
         {
             if (filter == null)
             {
                 throw new ArgumentNullException();
             }
+
             var results = new List<T>();
             var found = Table.FindSync(filter);
             while (found.MoveNext())
@@ -167,6 +179,7 @@ namespace MongoORM4NetCore
                 var batch = found.Current;
                 results.AddRange(batch.Select(item => BsonSerializer.Deserialize<T>(item)));
             }
+
             return results;
         }
 
@@ -175,7 +188,9 @@ namespace MongoORM4NetCore
             var fieldExists = Table.Find(Builders<BsonDocument>.Filter.Exists(field));
             return fieldExists.CountDocuments() > 0;
         }
+
         #region GetOne
+
         /// <summary>
         /// Gets the object given by the "id" parameter.
         /// </summary>
@@ -183,13 +198,12 @@ namespace MongoORM4NetCore
         /// <returns></returns>
         public virtual T GetOne(string id)
         {
-
             BsonDocument filter = GetDocumentForInheritance();
             filter.AddRange(new BsonDocument { { "_id", id } });
 
             if (!FieldCheck("_id"))
             {
-                return null;
+                return default;
             }
 
             var cursor = Table.FindSync(filter);
@@ -197,22 +211,23 @@ namespace MongoORM4NetCore
             try
             {
                 var batch = cursor.Current;
-                if (batch == null) return null;
+                if (batch == null) return default;
                 return BsonSerializer.Deserialize<T>(batch.FirstOrDefault());
             }
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
-                return null;
+                return default;
             }
         }
+
         /// <summary>
         /// Searches given value in given Field. If available, SoftDeletes are included.
         /// </summary>
         /// <param name="field"></param>
         /// <param name="value"></param>
         /// <returns></returns>
-        public List<T> Search(string field, string value)
+        public IEnumerable<T> Search(string field, string value)
         {
             BsonDocument GetFilter()
             {
@@ -227,33 +242,44 @@ namespace MongoORM4NetCore
             results.AddRange(batch.Select(item => BsonSerializer.Deserialize<T>(item)));
             return results;
         }
+
+        public IEnumerable<T> Search(Expression<Func<T, bool>> expression)
+        {
+            return GenericTable.AsQueryable().Where(expression).AsEnumerable();
+        }
+
         /// <summary>
         /// Searches by given value by multiple given Fields. If available, SoftDeletes are included.
         /// </summary>
         /// <param name="value"></param>
         /// <param name="fields"></param>
         /// <returns></returns>
-        public List<T> MultipleFieldSearch(string value, params string[] fields)
+        public IEnumerable<T> MultipleFieldSearch(string value, params string[] fields)
         {
             if (!fields.Any())
             {
                 throw new Exception();
             }
+
             BsonDocument GetFilter(string column)
             {
                 return new BsonDocument { { column, new BsonDocument { { "$regex", "(?i)" + value + "(?-i)" } } } };
             }
+
             var filterArray = new BsonArray();
             foreach (var field in fields)
             {
                 FieldCheckWithException(field);
                 filterArray.Add(GetFilter(field));
             }
-            var bsonOr = new BsonDocument{
+
+            var bsonOr = new BsonDocument
             {
-                "$or",
-                filterArray
-            }};
+                {
+                    "$or",
+                    filterArray
+                }
+            };
 
             //var bsonResult = new BsonDocument{{"$match",bsonOr}};
             var cursor = Table.FindSync(bsonOr);
@@ -271,6 +297,7 @@ namespace MongoORM4NetCore
                 throw new Exception();
             }
         }
+
         /// <summary>
         /// Returns the object given by field and value. If can't be found, returns null.
         /// </summary>
@@ -286,16 +313,14 @@ namespace MongoORM4NetCore
                 var cursor = Table.FindSync(filter);
                 cursor.MoveNext();
                 var batch = cursor.Current;
-                if (batch == null) return null;
+                if (batch == null) return default;
                 return BsonSerializer.Deserialize<T>(batch.FirstOrDefault());
-
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 var exception = new Exception(); //todo <-------
-                throw ex;
+                throw;
             }
-
         }
 
         #endregion
@@ -315,10 +340,10 @@ namespace MongoORM4NetCore
             }
             catch
             {
-
                 return false; //todo BringBackFailed || UpdateFilterFailed
             }
         }
+
         /// <summary>
         /// Inserts a given entity into the MongoDB Collection.
         /// </summary>
@@ -331,7 +356,7 @@ namespace MongoORM4NetCore
                 Table.InsertOne(entity.ToBsonDocument());
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 throw new Exception();
             }
@@ -351,22 +376,21 @@ namespace MongoORM4NetCore
             }
             catch
             {
-                return false;// todo InsertManyFailedException
+                return false; // todo InsertManyFailedException
             }
-
-
         }
+
         /// <summary>
         /// Updates a chosen entity. Note that it can also change _id property of entity.
         /// </summary>
         /// <param name="id"></param>
         /// <param name="entity"></param>
         /// <returns></returns>
-        public virtual bool Update(string id, T entity)
+        public virtual bool Update(T entity)
         {
             try
             {
-                var filter = new BsonDocument { { "_id", id } };
+                var filter = new BsonDocument { { "_id", entity.Id } };
                 var bsonEntity = entity.ToBsonDocument();
                 var update = new BsonDocument { { "$set", bsonEntity } };
                 Table.UpdateOne(filter, update);
@@ -377,7 +401,9 @@ namespace MongoORM4NetCore
                 throw new Exception();
             }
         }
-            
-        public string TableName => typeof(T).Name;
+        public IFindFluent<T, T> Find(Expression<Func<T, bool>> filter, FindOptions options = null)
+        {
+            return GenericTable.Find(filter, options);
+        }
     }
 }

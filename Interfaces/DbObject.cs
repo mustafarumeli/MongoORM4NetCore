@@ -5,7 +5,7 @@ using MongoDB.Bson.Serialization.Attributes;
 
 namespace MongoORM4NetCore.Interfaces
 {
-    public abstract class DbObject
+    public abstract class DbObject : IDbObject
     {
         [BsonElement("_id")]
         public string Id { get; set; }
@@ -38,5 +38,11 @@ namespace MongoORM4NetCore.Interfaces
             }
             return returnValue.ToString();
         }
+    }
+
+    public interface IDbObject
+    {
+        string Id { get; set; }
+        DateTime CreationDate { get; set; }
     }
 }

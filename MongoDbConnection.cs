@@ -24,7 +24,7 @@ namespace MongoORM4NetCore
             int port = 27017,
             string userName = "",
             string password = "",
-            Dictionary<string, string> connectionStringOptions = null,
+            IDictionary<string, string> connectionStringOptions = null,
             IEnumerable<MongoConnectionStringReplicas> connectionStringReplicas = null)
         {
             if (string.IsNullOrWhiteSpace(databaseName) == true) databaseName = "admin";
